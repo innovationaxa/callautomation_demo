@@ -1,4 +1,4 @@
-export type Channel = "app" | "whatsapp";
+export type Channel = "app" | "whatsapp" | "sms";
 
 export type TranscriptBeat = {
   t: number; // seconds from call start
@@ -84,11 +84,17 @@ export type ClaimEvent = {
 };
 
 // The channel Mon AXA's notification service would resolve to for this beat
-// (in-app is the default/priority channel; WhatsApp when there's no active
+// (in-app is the default/priority channel; WhatsApp/SMS when there's no active
 // in-app session or the client expressed that preference — cf. §4/§4bis).
 export type TimelineEvent = {
   t: number; // seconds from call start, when this event fires
   channel: Channel;
+  // True only on the event that represents a genuine push to the client for
+  // this channel (matches the audio moment where the assistant actually says
+  // "c'est envoyé" / "vous recevrez une notification" — not every dossier
+  // update is a push). Gates when the "app" phone reveals its real page, so
+  // it never shows up before the voicebot has actually announced it.
+  revealSelfcare?: boolean;
   event: Omit<ClaimEvent, "eventId" | "occurredAt">;
 };
 
@@ -174,6 +180,7 @@ export const SCENARIOS: Scenario[] = [
       {
         t: 122,
         channel: "app",
+        revealSelfcare: true,
         event: {
           type: "document_available",
           claim_reference: "SIN-2026-06018",
@@ -239,6 +246,7 @@ export const SCENARIOS: Scenario[] = [
       {
         t: 38,
         channel: "app",
+        revealSelfcare: true,
         event: {
           type: "payment_update",
           claim_reference: "SIN-2026-05014",
@@ -272,10 +280,12 @@ export const SCENARIOS: Scenario[] = [
       {
         t: 128,
         channel: "whatsapp",
+        revealSelfcare: true,
         event: {
           type: "transfer_to_agent",
           claim_reference: "SIN-2026-05014",
-          title: "Un conseiller va vous recontacter",
+          title: "Transfert vers un gestionnaire",
+          description: "Mise en relation directe via une file d'attente — pas de rappel différé.",
           reason: "Difficulté d'accès à l'espace client Mon AXA",
           notify_enabled: true,
           recipient: "client",
@@ -328,6 +338,7 @@ export const SCENARIOS: Scenario[] = [
       {
         t: 88,
         channel: "app",
+        revealSelfcare: true,
         event: {
           type: "document_available",
           claim_reference: "SIN-2026-06020",
@@ -405,6 +416,7 @@ export const SCENARIOS: Scenario[] = [
       {
         t: 71,
         channel: "app",
+        revealSelfcare: true,
         event: {
           type: "custom",
           claim_reference: "SIN-2026-06022",

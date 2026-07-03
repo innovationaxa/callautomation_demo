@@ -2,7 +2,7 @@
 
 import { useRef, useState, useEffect } from "react";
 import { SCENARIOS, getScenario } from "@/lib/scenarios";
-import type { Scenario, TranscriptBeat, TimelineEvent } from "@/lib/scenarios";
+import type { Scenario, TranscriptBeat, TimelineEvent, Channel } from "@/lib/scenarios";
 import { Mascot, type MascotState } from "@/components/Mascot";
 import { renderEventCard, type EventCard } from "@/lib/eventDisplay";
 
@@ -94,8 +94,9 @@ export default function Page() {
   const [elapsed, setElapsed] = useState(0);
   const [duration, setDuration] = useState(0);
   const [eventsFired, setEventsFired] = useState<FiredEvent[]>([]);
-  const [whatsappBanner, setWhatsappBanner] = useState<EventCard | null>(null);
+  const [channelBanner, setChannelBanner] = useState<{ channel: "whatsapp" | "sms"; card: EventCard } | null>(null);
   const [seekFlash, setSeekFlash] = useState<"back" | "fwd" | null>(null);
+  const [channelView, setChannelView] = useState<Channel>("app");
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const firedEventIdx = useRef(0);
@@ -109,15 +110,17 @@ export default function Page() {
     setElapsed(0);
     setDuration(0);
     setEventsFired([]);
-    setWhatsappBanner(null);
+    setChannelBanner(null);
     firedEventIdx.current = 0;
     handoffFired.current = false;
     if (bannerTimeout.current) clearTimeout(bannerTimeout.current);
   }
 
   function startScenario(key: Scenario["key"]) {
+    const next = getScenario(key);
     setScenarioKey(key);
     resetPlaybackState();
+    setChannelView(next?.defaultChannel ?? "app");
     setPhase("calling");
   }
 
@@ -154,10 +157,10 @@ export default function Page() {
     setPhase("done");
   }
 
-  function showWhatsappBanner(card: EventCard) {
+  function showChannelBanner(channel: "whatsapp" | "sms", card: EventCard) {
     if (bannerTimeout.current) clearTimeout(bannerTimeout.current);
-    setWhatsappBanner(card);
-    bannerTimeout.current = setTimeout(() => setWhatsappBanner(null), 5000);
+    setChannelBanner({ channel, card });
+    bannerTimeout.current = setTimeout(() => setChannelBanner(null), 5000);
   }
 
   function handleTimeUpdate() {
@@ -172,8 +175,8 @@ export default function Page() {
       const beat = scenario.timeline[firedEventIdx.current];
       const index = firedEventIdx.current;
       setEventsFired((prev) => [...prev, { beat, index, posted: mode === "rehearsal" ? false : null }]);
-      if (beat.channel === "whatsapp") {
-        showWhatsappBanner(renderEventCard(beat.event));
+      if (beat.channel === "whatsapp" || beat.channel === "sms") {
+        showChannelBanner(beat.channel, renderEventCard(beat.event));
       }
       if (mode === "real") {
         fetch("/api/demo/event", {
@@ -246,6 +249,13 @@ export default function Page() {
   const historyBeats = activeIdx > 0 ? transcript.slice(Math.max(0, activeIdx - 2), activeIdx) : [];
   const mascotLiveState: MascotState =
     phase === "done" ? "happy" : activeBeat ? (activeBeat.speaker === "ia" ? "talking" : "listening") : "listening";
+
+  // The "app" phone only reveals its real page once a genuinely-pushed event
+  // fires (revealSelfcare) — not on any dossier update — so it never shows up
+  // before the voicebot has actually announced sending something.
+  const appRevealed = eventsFired.some((e) => e.beat.channel === "app" && e.beat.revealSelfcare);
+  const whatsappEvents = eventsFired.filter((e) => e.beat.channel === "whatsapp");
+  const smsEvents = eventsFired.filter((e) => e.beat.channel === "sms");
 
   return (
     <div className="min-h-screen">
@@ -559,7 +569,7 @@ export default function Page() {
                             )}
                             <div className="flex items-center gap-1.5 mt-1">
                               <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-axa-blue/10 text-axa-blue">
-                                {beat.channel === "app" ? "Mon AXA" : "WhatsApp"}
+                                {beat.channel === "app" ? "Mon AXA" : beat.channel === "whatsapp" ? "WhatsApp" : "SMS"}
                               </span>
                               <span className="text-[9px] text-gray-400">
                                 {posted === null
@@ -580,15 +590,38 @@ export default function Page() {
               </PhoneShell>
             </div>
 
-            {/* Phone 3 — the real Mon AXA app, live, with a WhatsApp banner accessory */}
+            {/* Phone 3 — selfcare: Mon AXA app / WhatsApp / SMS, switchable */}
             <div className="flex flex-col items-center gap-2">
-              <div className="text-xs font-semibold text-axa-blue/60 uppercase tracking-wide">
-                3 · App Mon AXA
+              <div className="flex items-center gap-2">
+                <div className="text-xs font-semibold text-axa-blue/60 uppercase tracking-wide">
+                  3 · Selfcare
+                </div>
+                <div className="flex rounded-full bg-axa-blue/10 p-0.5">
+                  {(["app", "whatsapp", "sms"] as Channel[]).map((c) => (
+                    <button
+                      key={c}
+                      onClick={() => setChannelView(c)}
+                      className={`px-2 py-0.5 rounded-full text-[10px] font-semibold transition ${
+                        channelView === c ? "bg-axa-blue text-white" : "text-axa-blue/60"
+                      }`}
+                    >
+                      {c === "app" ? "Mon AXA" : c === "whatsapp" ? "WhatsApp" : "SMS"}
+                    </button>
+                  ))}
+                </div>
               </div>
-              <PhoneShell statusTone="light" hideStatusBar={eventsFired.length > 0}>
-                <AppScreen scenario={scenario} revealed={eventsFired.length > 0} whatsappBanner={whatsappBanner} />
+              <PhoneShell statusTone="light" hideStatusBar={channelView === "app" && appRevealed}>
+                <SelfcareScreen
+                  scenario={scenario}
+                  channelView={channelView}
+                  appRevealed={appRevealed}
+                  whatsappEvents={whatsappEvents}
+                  smsEvents={smsEvents}
+                  channelBanner={channelBanner}
+                  onSwitchChannel={setChannelView}
+                />
               </PhoneShell>
-              {eventsFired.length > 0 && (
+              {channelView === "app" && appRevealed && (
                 <a
                   href={scenario.previewUrl}
                   target="_blank"
@@ -681,50 +714,143 @@ function PhoneShell({
   );
 }
 
-function AppScreen({
+function SelfcareScreen({
   scenario,
-  revealed,
-  whatsappBanner,
+  channelView,
+  appRevealed,
+  whatsappEvents,
+  smsEvents,
+  channelBanner,
+  onSwitchChannel,
 }: {
   scenario: Scenario;
-  revealed: boolean;
-  whatsappBanner: EventCard | null;
+  channelView: Channel;
+  appRevealed: boolean;
+  whatsappEvents: FiredEvent[];
+  smsEvents: FiredEvent[];
+  channelBanner: { channel: "whatsapp" | "sms"; card: EventCard } | null;
+  onSwitchChannel: (c: Channel) => void;
 }) {
   return (
     <div className="relative w-full h-full bg-white">
-      {/* WhatsApp accessory banner */}
-      {whatsappBanner && (
-        <div className="absolute top-9 inset-x-2 z-30" style={{ animation: "banner-drop 0.3s ease-out" }}>
+      {/* Accessory banner: alerts that a message just landed on the OTHER channel */}
+      {channelBanner && channelBanner.channel !== channelView && (
+        <button
+          onClick={() => onSwitchChannel(channelBanner.channel)}
+          className="absolute top-9 inset-x-2 z-30 text-left w-[calc(100%-1rem)]"
+          style={{ animation: "banner-drop 0.3s ease-out" }}
+        >
           <div className="flex items-start gap-2 bg-white/95 backdrop-blur rounded-2xl shadow-lg p-2.5 border border-black/5">
             <div className="w-7 h-7 rounded-full bg-axa-blue flex items-center justify-center text-white text-[9px] font-bold shrink-0">
               AXA
             </div>
             <div className="min-w-0">
               <div className="text-[11px] font-semibold text-gray-800 flex items-center gap-1">
-                AXA France <span className="text-[#34B7F1]">✓</span>
-                <span className="text-gray-400 font-normal ml-auto">WhatsApp</span>
+                {channelBanner.channel === "whatsapp" ? (
+                  <>
+                    AXA France <span className="text-[#34B7F1]">✓</span>
+                  </>
+                ) : (
+                  "AXA"
+                )}
+                <span className="text-gray-400 font-normal ml-auto">
+                  {channelBanner.channel === "whatsapp" ? "WhatsApp" : "SMS"}
+                </span>
               </div>
-              <div className="text-[11px] text-gray-600 truncate">{whatsappBanner.title}</div>
+              <div className="text-[11px] text-gray-600 truncate">{channelBanner.card.title}</div>
             </div>
           </div>
-        </div>
+        </button>
       )}
 
-      {revealed ? (
-        <iframe
-          src={scenario.previewUrl}
-          title="Mon AXA — suivi de sinistre"
-          className="w-full h-full border-0"
-        />
-      ) : (
-        <div className="w-full h-full flex flex-col items-center justify-center text-center px-8 gap-3 bg-[#F3F5FA] pt-8">
-          <Mascot size={72} state="idle" />
-          <div className="text-sm font-semibold text-axa-blue">En attente du premier événement…</div>
-          <div className="text-xs text-gray-500 max-w-[240px]">
-            Le vrai dossier {scenario.claimReference} s&rsquo;affichera ici dès que le voicebot transmettra la première information — sans attendre la fin de l&rsquo;appel.
+      {channelView === "app" &&
+        (appRevealed ? (
+          <iframe
+            src={scenario.previewUrl}
+            title="Mon AXA — suivi de sinistre"
+            className="w-full h-full border-0"
+          />
+        ) : (
+          <div className="w-full h-full flex flex-col items-center justify-center text-center px-8 gap-3 bg-[#F3F5FA] pt-8">
+            <Mascot size={72} state="idle" />
+            <div className="text-sm font-semibold text-axa-blue">En attente de la notification…</div>
+            <div className="text-xs text-gray-500 max-w-[240px]">
+              Le vrai dossier {scenario.claimReference} s&rsquo;affichera ici dès que le voicebot annonce
+              réellement l&rsquo;envoi d&rsquo;une information — pas avant.
+            </div>
           </div>
+        ))}
+
+      {channelView === "whatsapp" && <WhatsAppThread events={whatsappEvents} />}
+      {channelView === "sms" && <SmsThread events={smsEvents} />}
+    </div>
+  );
+}
+
+function WhatsAppThread({ events }: { events: FiredEvent[] }) {
+  return (
+    <div className="w-full h-full flex flex-col bg-[#0B141A]">
+      <div className="flex items-center gap-2 px-4 pt-11 pb-3 bg-[#1F2C34]">
+        <div className="w-8 h-8 rounded-full bg-axa-blue flex items-center justify-center text-white text-[10px] font-bold shrink-0">
+          AXA
         </div>
-      )}
+        <div>
+          <div className="text-white text-sm font-semibold flex items-center gap-1">
+            AXA France <span className="text-[#34B7F1] text-xs">✓</span>
+          </div>
+          <div className="text-[10px] text-white/40">Compte professionnel</div>
+        </div>
+      </div>
+      <div className="flex-1 overflow-y-auto p-3 space-y-2">
+        {events.length === 0 ? (
+          <div className="text-xs text-white/30 italic text-center pt-10">
+            Aucun message WhatsApp pour cet appel.
+          </div>
+        ) : (
+          events.map(({ beat, index }) => {
+            const card = renderEventCard(beat.event);
+            return (
+              <div key={index} className="animate-rise-in bg-[#202C33] rounded-xl rounded-tl-sm p-2.5 max-w-[85%]">
+                <div className="text-xs font-semibold text-[#E9EDF0]">{card.title}</div>
+                {card.detail && <div className="text-[11px] text-white/60 mt-0.5">{card.detail}</div>}
+              </div>
+            );
+          })
+        )}
+      </div>
+    </div>
+  );
+}
+
+function SmsThread({ events }: { events: FiredEvent[] }) {
+  return (
+    <div className="w-full h-full flex flex-col bg-[#EFEFF4]">
+      <div className="flex items-center gap-2 px-4 pt-11 pb-3 bg-white border-b border-black/5">
+        <div className="w-8 h-8 rounded-full bg-axa-blue flex items-center justify-center text-white text-[10px] font-bold shrink-0">
+          AXA
+        </div>
+        <div className="text-sm font-semibold text-gray-800">AXA</div>
+      </div>
+      <div className="flex-1 overflow-y-auto p-3 space-y-2">
+        {events.length === 0 ? (
+          <div className="text-xs text-gray-400 italic text-center pt-10">
+            Aucun SMS envoyé pendant cet appel.
+          </div>
+        ) : (
+          events.map(({ beat, index }) => {
+            const card = renderEventCard(beat.event);
+            return (
+              <div
+                key={index}
+                className="animate-rise-in bg-white rounded-2xl rounded-tl-sm p-2.5 max-w-[85%] shadow-sm border border-black/5"
+              >
+                <div className="text-xs font-semibold text-gray-800">{card.title}</div>
+                {card.detail && <div className="text-[11px] text-gray-500 mt-0.5">{card.detail}</div>}
+              </div>
+            );
+          })
+        )}
+      </div>
     </div>
   );
 }
